@@ -30,6 +30,7 @@ ENV REDIS_PASSWORD ""
 ENV CACHE_TTL "30s"
 ENV LOCK_TTL "15s"
 ENV USE_LOCK "false"
+ENV PROJECT_NAME ""
 
 COPY --from=builder /app/main /app/main
 
