@@ -200,13 +200,15 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		return // todo: should we try to serve it anyway?
 	}
 
+	defer func() {
+		// unlock the lock
+		if err := server.LockMgr.UnLock(ctx, key); err != nil {
+			server.Logger.Error("Could not unlock the lock", zap.Error(err))
+		}
+	}()
+
 	// lock is acquired
 	serve(server, w, r)
-
-	// unlock the lock
-	if err := server.LockMgr.UnLock(ctx, key); err != nil {
-		server.Logger.Error("Could not unlock the lock", zap.Error(err))
-	}
 }
 
 func serve(server CacheServer, w http.ResponseWriter, r *http.Request) {
