@@ -6,23 +6,16 @@ import (
 )
 
 var (
-	gauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "sidecache",
-			Name:      "cache_hit",
-			Help:      "This is cache hit metric",
-		})
-
 	cacheHitCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "sidecache",
+			Namespace: "sidecache_" + ProjectName,
 			Name:      "cache_hit_counter",
 			Help:      "Cache hit count",
 		})
 
 	totalRequestCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "sidecache",
+			Namespace: "sidecache_" + ProjectName,
 			Name:      "all_request_hit_counter",
 			Help:      "All request hit counter",
 		})
