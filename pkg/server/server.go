@@ -154,13 +154,16 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	key := hashedUrl + "-lock"
 
 	lockTTL, err := time.ParseDuration(os.Getenv("LOCK_TTL"))
+	useLock := strings.ToLower(os.Getenv("USE_LOCK")) == "true"
 	if err != nil {
 		server.Logger.Error("invalid lock TTL", zap.Error(err))
 		return
 	}
 
-	// try to acquire the lock
-	_, err = server.LockMgr.Lock(ctx, key, lockTTL)
+	if useLock {
+		// try to acquire the lock
+		_, err = server.LockMgr.Lock(ctx, key, lockTTL)
+	}
 
 	resultStr := "acquired"
 
@@ -176,7 +179,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 					multiplier = 5
 				}
 				backoff := time.Duration(multiplier*int(math.Pow(10, float64(i/2+1)))) * time.Millisecond
-				if backoff >= lockTTL{
+				if backoff >= lockTTL {
 					break
 				}
 				server.Logger.Info("wait lock", zap.Duration("backoff", backoff), zap.String("url", r.URL.String()))
@@ -213,12 +216,14 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		return // todo: should we try to serve it anyway?
 	}
 
-	defer func() {
-		// unlock the lock
-		if err := server.LockMgr.UnLock(ctx, key); err != nil {
-			server.Logger.Error("Could not unlock the lock", zap.Error(err))
-		}
-	}()
+	if useLock {
+		defer func() {
+			// unlock the lock
+			if err := server.LockMgr.UnLock(ctx, key); err != nil {
+				server.Logger.Error("Could not unlock the lock", zap.Error(err))
+			}
+		}()
+	}
 
 	// lock is acquired
 	serve(server, w, r)
