@@ -29,6 +29,7 @@ ENV REDIS_ADDRESS "127.0.0.1:6379"
 ENV REDIS_PASSWORD ""
 ENV CACHE_TTL "30s"
 ENV LOCK_TTL "15s"
+ENV USE_LOCK "false"
 
 COPY --from=builder /app/main /app/main
 
