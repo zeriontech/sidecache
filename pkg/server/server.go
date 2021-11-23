@@ -152,8 +152,15 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 
 	hashedUrl := server.HashURL(server.ReorderQueryString(r.URL))
 	key := hashedUrl + "-lock"
-	lockTTL := 15 * time.Second // todo: configure TTL
-	_, err := server.LockMgr.Lock(ctx, key, lockTTL)
+
+	lockTTL, err := time.ParseDuration(os.Getenv("LOCK_TTL"))
+	if err != nil {
+		server.Logger.Error("invalid lock TTL", zap.Error(err))
+		return
+	}
+
+	// try to acquire the lock
+	_, err = server.LockMgr.Lock(ctx, key, lockTTL)
 
 	resultStr := "acquired"
 
@@ -161,13 +168,17 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		// some other goroutine is already working on the same request
 		result := make(chan string, 1)
 		go func(hashedUrl string, result chan string) {
-			for i := 0; i < 7; i++ {
-				// back-offs: 10ms - 50ms - 100ms - 500ms - 1s - 5s - 10s
+			i := 0
+			for {
+				// back-offs: 10ms, 50ms, 100ms, 500ms, 1s, 5s, 10s, ...
 				multiplier := 1
 				if i%2 != 0 {
 					multiplier = 5
 				}
 				backoff := time.Duration(multiplier*int(math.Pow(10, float64(i/2+1)))) * time.Millisecond
+				if backoff >= lockTTL{
+					break
+				}
 				server.Logger.Info("wait lock", zap.Duration("backoff", backoff), zap.String("url", r.URL.String()))
 				time.Sleep(backoff)
 
@@ -184,6 +195,8 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 					result <- "acquired"
 					return
 				}
+
+				i++
 			}
 			result <- "failed"
 		}(hashedUrl, result)
