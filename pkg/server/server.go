@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amyangfei/redlock-go/v2/redlock"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zeriontech/sidecache/pkg/cache"
 	"go.uber.org/zap"
@@ -26,6 +28,7 @@ const applicationDefaultPort = ":9191"
 
 type CacheServer struct {
 	Repo           cache.Repository
+	LockMgr        *redlock.RedLock
 	Proxy          *httputil.ReverseProxy
 	Prometheus     *Prometheus
 	Logger         *zap.Logger
@@ -38,9 +41,10 @@ type CacheData struct {
 	StatusCode int
 }
 
-func NewServer(repo cache.Repository, proxy *httputil.ReverseProxy, prom *Prometheus, logger *zap.Logger) *CacheServer {
+func NewServer(repo cache.Repository, lockMgr *redlock.RedLock, proxy *httputil.ReverseProxy, prom *Prometheus, logger *zap.Logger) *CacheServer {
 	return &CacheServer{
 		Repo:           repo,
+		LockMgr:        lockMgr,
 		Proxy:          proxy,
 		Prometheus:     prom,
 		Logger:         logger,
@@ -55,12 +59,6 @@ func (server CacheServer) Start(stopChan chan int) {
 		}
 
 		cacheHeadersEnabled := r.Header.Get(CacheHeaderEnabledKey)
-		maxAgeInSecond, err := time.ParseDuration(os.Getenv("CACHE_TTL"))
-
-		if err != nil {
-			server.Logger.Error("invalid cache TTL", zap.Error(err))
-			return nil
-		}
 
 		r.Header.Del("Content-Length") // https://github.com/golang/go/issues/14975
 		b, err := ioutil.ReadAll(r.Body)
@@ -84,7 +82,7 @@ func (server CacheServer) Start(stopChan chan int) {
 
 			cacheDataBytes, _ := json.Marshal(cacheData)
 			server.Repo.SetKey(hashedURL, cacheDataBytes, ttl)
-		}(r.Request.URL, b, r.StatusCode, maxAgeInSecond, cacheHeadersEnabled)
+		}(r.Request.URL, b, r.StatusCode, CacheTtl, cacheHeadersEnabled)
 
 		err = r.Body.Close()
 		if err != nil {
@@ -126,6 +124,7 @@ func determinatePort() string {
 }
 
 func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := context.TODO()
 	server.Prometheus.TotalRequestCounter.Inc()
 
 	defer func() {
@@ -145,34 +144,113 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	hashedUrl := server.HashURL(server.ReorderQueryString(r.URL))
+	key := hashedUrl + "-lock"
+
+	var err error
+
+	if UseLock {
+		// try to acquire the lock
+		_, err = server.LockMgr.Lock(ctx, key, LockTtl)
+	}
+
+	resultStr := "acquired"
+
+	if err != nil {
+		// some other goroutine is already working on the same request
+		result := make(chan string, 1)
+		go func(hashedUrl string, result chan string) {
+			i := 0
+			for {
+				// back-offs: 10ms, 50ms, 100ms, 500ms, 1s, 5s, 10s, ...
+				multiplier := 1
+				if i%2 != 0 {
+					multiplier = 5
+				}
+				backoff := time.Duration(multiplier*int(math.Pow(10, float64(i/2+1)))) * time.Millisecond
+				if backoff >= LockTtl {
+					break
+				}
+				server.Logger.Info("wait lock", zap.Duration("backoff", backoff), zap.String("url", r.URL.String()))
+				time.Sleep(backoff)
+
+				// check the cache
+				if cachedDataBytes := server.CheckCache(hashedUrl); cachedDataBytes != nil {
+					serveFromCache(cachedDataBytes, server, w, r)
+					result <- "served"
+					return
+				}
+
+				// try to acquire the lock again
+				if _, err := server.LockMgr.Lock(ctx, key, LockTtl); err == nil {
+					// lock is acquired
+					result <- "acquired"
+					return
+				}
+
+				i++
+			}
+			result <- "failed"
+		}(hashedUrl, result)
+
+		// wait for the lock
+		resultStr = <-result
+	}
+
+	if resultStr == "served" {
+		server.Logger.Info("served from cache while waiting for lock", zap.String("url", r.URL.String()))
+		return
+	} else if resultStr == "failed" {
+		server.Logger.Error("failed to acquire the lock", zap.String("url", r.URL.String()))
+		return // todo: should we try to serve it anyway?
+	}
+
+	if UseLock {
+		defer func() {
+			// unlock the lock
+			if err := server.LockMgr.UnLock(ctx, key); err != nil {
+				server.Logger.Error("Could not unlock the lock", zap.Error(err))
+			}
+		}()
+	}
+
+	// lock is acquired
+	serve(server, w, r)
+}
+
+func serve(server CacheServer, w http.ResponseWriter, r *http.Request) {
 	hashedURL := server.HashURL(server.ReorderQueryString(r.URL))
 	cachedDataBytes := server.CheckCache(hashedURL)
 
-	server.Logger.Info("serve request", zap.String("url", r.URL.String()), zap.Bool("cached", cachedDataBytes != nil))
+	server.Logger.Info("serve", zap.String("url", r.URL.String()), zap.Bool("cached", cachedDataBytes != nil))
 
 	if cachedDataBytes != nil {
-		w.Header().Add("X-Cache-Response-For", r.URL.String())
-		w.Header().Add("Content-Type", "application/json;charset=UTF-8") //todo get from cache?
-
-		var cachedData CacheData
-		err := json.Unmarshal(cachedDataBytes, &cachedData)
-		if err != nil {
-			server.Logger.Error("Can not unmarshal cached data", zap.Error(err))
-			return
-		}
-
-		writeHeaders(w, cachedData.Headers)
-		w.WriteHeader(cachedData.StatusCode)
-
-		if _, err := io.Copy(w, bytes.NewReader(cachedData.Body)); err != nil {
-			server.Logger.Error("IO error", zap.Error(err))
-			return
-		}
-
-		server.Prometheus.CacheHitCounter.Inc()
+		serveFromCache(cachedDataBytes, server, w, r)
 	} else {
 		server.Proxy.ServeHTTP(w, r)
 	}
+}
+
+func serveFromCache(cachedDataBytes []byte, server CacheServer, w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("X-Cache-Response-For", r.URL.String())
+	w.Header().Add("Content-Type", "application/json;charset=UTF-8")
+
+	var cachedData CacheData
+	err := json.Unmarshal(cachedDataBytes, &cachedData)
+	if err != nil {
+		server.Logger.Error("Can not unmarshal cached data", zap.Error(err))
+		return
+	}
+
+	writeHeaders(w, cachedData.Headers)
+	w.WriteHeader(cachedData.StatusCode)
+
+	if _, err := io.Copy(w, bytes.NewReader(cachedData.Body)); err != nil {
+		server.Logger.Error("IO error", zap.Error(err))
+		return
+	}
+
+	server.Prometheus.CacheHitCounter.Inc()
 }
 
 func writeHeaders(w http.ResponseWriter, headers map[string]string) {
