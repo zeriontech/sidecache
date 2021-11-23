@@ -189,7 +189,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		}(hashedUrl, result)
 
 		// wait for the lock
-		resultStr = <- result
+		resultStr = <-result
 	}
 
 	if resultStr == "served" {
@@ -197,7 +197,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if resultStr == "failed" {
 		server.Logger.Error("failed to acquire the lock", zap.String("url", r.URL.String()))
-		return  // todo: should we try to serve it anyway?
+		return // todo: should we try to serve it anyway?
 	}
 
 	// lock is acquired
