@@ -150,37 +150,54 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	key := server.HashURL(server.ReorderQueryString(r.URL)) + "-lock"
-	lockTTL := 15 * time.Second  // todo: configure TTL
+	hashedUrl := server.HashURL(server.ReorderQueryString(r.URL))
+	key := hashedUrl + "-lock"
+	lockTTL := 15 * time.Second // todo: configure TTL
 	_, err := server.LockMgr.Lock(ctx, key, lockTTL)
+
+	resultStr := "acquired"
+
 	if err != nil {
 		// some other goroutine is already working on the same request
-		acquired := make(chan string, 1)
-
-		go func(done chan string) {
+		result := make(chan string, 1)
+		go func(hashedUrl string, result chan string) {
 			for i := 0; i < 7; i++ {
 				// back-offs: 10ms - 50ms - 100ms - 500ms - 1s - 5s - 10s
 				multiplier := 1
-				if i % 2 != 0 {
+				if i%2 != 0 {
 					multiplier = 5
 				}
-				backoff := time.Duration(multiplier * int(math.Pow(10, float64(i / 2 + 1)))) * time.Millisecond
+				backoff := time.Duration(multiplier*int(math.Pow(10, float64(i/2+1)))) * time.Millisecond
 				server.Logger.Info("wait lock", zap.Duration("backoff", backoff), zap.String("url", r.URL.String()))
 				time.Sleep(backoff)
 
+				// check the cache
+				if cachedDataBytes := server.CheckCache(hashedUrl); cachedDataBytes != nil {
+					serveFromCache(cachedDataBytes, server, w, r)
+					result <- "served"
+					return
+				}
+
+				// try to acquire the lock again
 				if _, err := server.LockMgr.Lock(ctx, key, lockTTL); err == nil {
 					// lock is acquired
-					acquired <- "success"
+					result <- "acquired"
 					return
 				}
 			}
-			acquired <- "fail"
-		}(acquired)
+			result <- "failed"
+		}(hashedUrl, result)
 
 		// wait for the lock
-		if result := <-acquired; result != "success" {
-			server.Logger.Error("failed to acquire the lock")
-		}
+		resultStr = <- result
+	}
+
+	if resultStr == "served" {
+		server.Logger.Info("served from cache while waiting for lock", zap.String("url", r.URL.String()))
+		return
+	} else if resultStr == "failed" {
+		server.Logger.Error("failed to acquire the lock", zap.String("url", r.URL.String()))
+		return  // todo: should we try to serve it anyway?
 	}
 
 	// lock is acquired
@@ -196,7 +213,7 @@ func serve(server CacheServer, w http.ResponseWriter, r *http.Request) {
 	hashedURL := server.HashURL(server.ReorderQueryString(r.URL))
 	cachedDataBytes := server.CheckCache(hashedURL)
 
-	server.Logger.Info("serve request", zap.String("url", r.URL.String()), zap.Bool("cached", cachedDataBytes != nil))
+	server.Logger.Info("serve", zap.String("url", r.URL.String()), zap.Bool("cached", cachedDataBytes != nil))
 
 	if cachedDataBytes != nil {
 		serveFromCache(cachedDataBytes, server, w, r)
@@ -207,7 +224,7 @@ func serve(server CacheServer, w http.ResponseWriter, r *http.Request) {
 
 func serveFromCache(cachedDataBytes []byte, server CacheServer, w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("X-Cache-Response-For", r.URL.String())
-	w.Header().Add("Content-Type", "application/json;charset=UTF-8")  // todo get from cache?
+	w.Header().Add("Content-Type", "application/json;charset=UTF-8")
 
 	var cachedData CacheData
 	err := json.Unmarshal(cachedDataBytes, &cachedData)
