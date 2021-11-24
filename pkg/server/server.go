@@ -157,10 +157,10 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		attempt := 1
+		attempt := 0
 		for {
 			// check the cache
-			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey))
+			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt + 1))
 			if cachedDataBytes := server.CheckCache(resultKey); cachedDataBytes != nil {
 				serveFromCache(cachedDataBytes, server, w, r)
 				return
@@ -172,6 +172,8 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 				server.Logger.Info("lock acquired", zap.String("key", key))
 				serve(server, w, r)
 				return
+			} else {
+				server.Logger.Error("lock is locked", zap.Error(err))
 			}
 
 			// wait a bit
@@ -184,6 +186,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			server.Logger.Info("sleeping", zap.String("key", key), zap.Duration("backoff", backoff))
 			time.Sleep(backoff)
+			attempt++
 		}
 	} else {
 		serve(server, w, r)
