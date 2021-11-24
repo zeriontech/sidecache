@@ -125,7 +125,7 @@ func determinatePort() string {
 
 func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := context.TODO()
-	server.Logger.Info("handle request", zap.String("url", r.URL.String()))
+	server.Logger.Info("handling request", zap.String("url", r.URL.String()))
 	server.Prometheus.TotalRequestCounter.Inc()
 
 	defer func() {
@@ -140,7 +140,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 				err = errors.New("unknown panic")
 			}
 
-			server.Logger.Info("Recovered from panic", zap.Error(err))
+			server.Logger.Info("recovered from panic", zap.Error(err))
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}()
@@ -153,14 +153,14 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			// unlock the lock
 			if err := server.LockMgr.UnLock(ctx, key); err != nil {
-				server.Logger.Error("Could not unlock the lock", zap.Error(err))
+				server.Logger.Error("could not unlock the lock", zap.Error(err))
 			}
 		}()
 
 		attempt := 0
 		for {
 			// check the cache
-			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt + 1))
+			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt+1))
 			if cachedDataBytes := server.CheckCache(resultKey); cachedDataBytes != nil {
 				serveFromCache(cachedDataBytes, server, w, r)
 				return
@@ -200,7 +200,7 @@ func serve(server CacheServer, w http.ResponseWriter, r *http.Request) {
 	if cachedDataBytes != nil {
 		serveFromCache(cachedDataBytes, server, w, r)
 	} else {
-		server.Logger.Info("proxy", zap.String("url", r.URL.String()))
+		server.Logger.Info("proxying request", zap.String("url", r.URL.String()))
 		server.Proxy.ServeHTTP(w, r)
 	}
 }
@@ -209,7 +209,7 @@ func serveFromCache(cachedDataBytes []byte, server CacheServer, w http.ResponseW
 	w.Header().Add("X-Cache-Response-For", r.URL.String())
 	w.Header().Add("Content-Type", "application/json;charset=UTF-8")
 
-	server.Logger.Info("serve from cache", zap.String("url", r.URL.String()))
+	server.Logger.Info("serving from cache", zap.String("url", r.URL.String()))
 	var cachedData CacheData
 	err := json.Unmarshal(cachedDataBytes, &cachedData)
 	if err != nil {
@@ -255,7 +255,7 @@ func (server CacheServer) ReorderQueryString(url *url.URL) string {
 
 func (server CacheServer) GetBackoff(attempt int) time.Duration {
 	multiplier := 1
-	if attempt % 2 != 0 {
+	if attempt%2 != 0 {
 		multiplier = 5
 	}
 	return time.Duration(multiplier*int(math.Pow(10, float64(attempt/2+1)))) * time.Millisecond

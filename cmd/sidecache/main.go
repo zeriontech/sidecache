@@ -17,31 +17,26 @@ func main() {
 	logger.Info("Side cache process started...", zap.String("version", version))
 
 	defer logger.Sync()
-	cacheRepo, err := cache.NewRedisRepository(logger)
-	if err != nil {
-		for {
-			logger.Warn("Redis is not connected, retrying...")
-			if repo, err := cache.NewRedisRepository(logger); err == nil {
-				cacheRepo = repo
-				break
-			}
-			time.Sleep(3 * time.Second)
+	var cacheRepo cache.Repository
+	for {
+		logger.Info("Connecting to Redis...")
+		if repo, err := cache.NewRedisRepository(logger); err == nil {
+			cacheRepo = repo
+			break
 		}
+		time.Sleep(3 * time.Second)
 	}
 	logger.Info("Redis is connected.")
 
-	lockMgr, err := redlock.NewRedLock([]string{os.Getenv("REDIS_ADDRESS")})
-	lockMgr.SetRetryCount(3)  // we have our custom retries also
-
-	if err != nil {
-		for {
-			logger.Warn("Redis LockManager is not connected, retrying...")
-			if mgr, err := redlock.NewRedLock([]string{os.Getenv("REDIS_ADDRESS")}); err == nil {
-				lockMgr = mgr
-				break
-			}
-			time.Sleep(3 * time.Second)
+	var lockMgr *redlock.RedLock
+	for {
+		logger.Info("Connecting to Redis LockManager...")
+		if mgr, err := redlock.NewRedLock([]string{os.Getenv("REDIS_ADDRESS")}); err == nil {
+			lockMgr = mgr
+			lockMgr.SetRetryCount(3) // we have our custom retries also
+			break
 		}
+		time.Sleep(3 * time.Second)
 	}
 	logger.Info("Redis LockManager is connected.")
 
