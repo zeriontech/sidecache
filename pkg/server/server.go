@@ -125,6 +125,7 @@ func determinatePort() string {
 
 func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := context.TODO()
+	server.Logger.Info("handle request", zap.String("url", r.URL.String()))
 	server.Prometheus.TotalRequestCounter.Inc()
 
 	defer func() {
@@ -145,7 +146,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	path := strings.Split(r.URL.Path, "/")
-	key := path[1]
+	key := "lock:" + path[1]
 	resultKey := server.HashURL(server.ReorderQueryString(r.URL))
 
 	if UseLock {
@@ -166,7 +167,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 
 			// try to acquire the lock
 			if _, err := server.LockMgr.Lock(ctx, key, LockTtl); err == nil {
-				server.Logger.Info("lock acquired", zap.String("address", key))
+				server.Logger.Info("lock acquired", zap.String("key", key))
 				serve(server, w, r)
 				return
 			}
