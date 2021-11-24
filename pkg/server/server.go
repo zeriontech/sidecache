@@ -144,66 +144,9 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	hashedUrl := server.HashURL(server.ReorderQueryString(r.URL))
-	key := hashedUrl + "-lock"
-
-	var err error
-
-	if UseLock {
-		// try to acquire the lock
-		_, err = server.LockMgr.Lock(ctx, key, LockTtl)
-	}
-
-	resultStr := "acquired"
-
-	if err != nil {
-		// some other goroutine is already working on the same request
-		result := make(chan string, 1)
-		go func(hashedUrl string, result chan string) {
-			i := 0
-			for {
-				// back-offs: 10ms, 50ms, 100ms, 500ms, 1s, 5s, 10s, ...
-				multiplier := 1
-				if i%2 != 0 {
-					multiplier = 5
-				}
-				backoff := time.Duration(multiplier*int(math.Pow(10, float64(i/2+1)))) * time.Millisecond
-				if backoff >= LockTtl {
-					break
-				}
-				server.Logger.Info("wait lock", zap.Duration("backoff", backoff), zap.String("url", r.URL.String()))
-				time.Sleep(backoff)
-
-				// check the cache
-				if cachedDataBytes := server.CheckCache(hashedUrl); cachedDataBytes != nil {
-					serveFromCache(cachedDataBytes, server, w, r)
-					result <- "served"
-					return
-				}
-
-				// try to acquire the lock again
-				if _, err := server.LockMgr.Lock(ctx, key, LockTtl); err == nil {
-					// lock is acquired
-					result <- "acquired"
-					return
-				}
-
-				i++
-			}
-			result <- "failed"
-		}(hashedUrl, result)
-
-		// wait for the lock
-		resultStr = <-result
-	}
-
-	if resultStr == "served" {
-		server.Logger.Info("served from cache while waiting for lock", zap.String("url", r.URL.String()))
-		return
-	} else if resultStr == "failed" {
-		server.Logger.Error("failed to acquire the lock", zap.String("url", r.URL.String()))
-		return // todo: should we try to serve it anyway?
-	}
+	path := strings.Split(r.URL.Path, "/")
+	key := path[1]
+	resultKey := server.HashURL(server.ReorderQueryString(r.URL))
 
 	if UseLock {
 		defer func() {
@@ -212,21 +155,45 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 				server.Logger.Error("Could not unlock the lock", zap.Error(err))
 			}
 		}()
-	}
 
-	// lock is acquired
-	serve(server, w, r)
+		attempt := 1
+		for {
+			// check the cache
+			if cachedDataBytes := server.CheckCache(resultKey); cachedDataBytes != nil {
+				serveFromCache(cachedDataBytes, server, w, r)
+				return
+			}
+
+			// try to acquire the lock
+			if _, err := server.LockMgr.Lock(ctx, key, LockTtl); err == nil {
+				server.Logger.Info("lock acquired", zap.String("address", key))
+				serve(server, w, r)
+				return
+			}
+
+			// wait a bit
+			backoff := server.GetBackoff(attempt)
+			if backoff >= LockTtl {
+				// failed to acquire the lock for too long
+				server.Logger.Error("failed to acquire the lock", zap.String("url", r.URL.String()))
+				w.WriteHeader(http.StatusGatewayTimeout)
+				return
+			}
+			time.Sleep(backoff)
+		}
+	} else {
+		serve(server, w, r)
+	}
 }
 
 func serve(server CacheServer, w http.ResponseWriter, r *http.Request) {
 	hashedURL := server.HashURL(server.ReorderQueryString(r.URL))
 	cachedDataBytes := server.CheckCache(hashedURL)
 
-	server.Logger.Info("serve", zap.String("url", r.URL.String()), zap.Bool("cached", cachedDataBytes != nil))
-
 	if cachedDataBytes != nil {
 		serveFromCache(cachedDataBytes, server, w, r)
 	} else {
+		server.Logger.Info("proxy", zap.String("url", r.URL.String()))
 		server.Proxy.ServeHTTP(w, r)
 	}
 }
@@ -235,6 +202,7 @@ func serveFromCache(cachedDataBytes []byte, server CacheServer, w http.ResponseW
 	w.Header().Add("X-Cache-Response-For", r.URL.String())
 	w.Header().Add("Content-Type", "application/json;charset=UTF-8")
 
+	server.Logger.Info("serve from cache", zap.String("url", r.URL.String()))
 	var cachedData CacheData
 	err := json.Unmarshal(cachedDataBytes, &cachedData)
 	if err != nil {
@@ -276,4 +244,12 @@ func (server CacheServer) CheckCache(url string) []byte {
 
 func (server CacheServer) ReorderQueryString(url *url.URL) string {
 	return url.Path + "?" + url.Query().Encode()
+}
+
+func (server CacheServer) GetBackoff(attempt int) time.Duration {
+	multiplier := 1
+	if attempt % 2 != 0 {
+		multiplier = 5
+	}
+	return time.Duration(multiplier*int(math.Pow(10, float64(attempt/2+1)))) * time.Millisecond
 }
