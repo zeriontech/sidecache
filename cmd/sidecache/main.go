@@ -31,6 +31,8 @@ func main() {
 	logger.Info("Redis is connected.")
 
 	lockMgr, err := redlock.NewRedLock([]string{os.Getenv("REDIS_ADDRESS")})
+	lockMgr.SetRetryCount(3)  // we have our custom retries also
+
 	if err != nil {
 		for {
 			logger.Warn("Redis LockManager is not connected, retrying...")
