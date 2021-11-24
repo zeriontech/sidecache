@@ -149,13 +149,6 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	resultKey := server.HashURL(server.ReorderQueryString(r.URL))
 
 	if UseLock {
-		defer func() {
-			// release the lock
-			if err := server.LockMgr.Release(key); err != nil {
-				server.Logger.Error("could not unlock the lock", zap.Error(err))
-			}
-		}()
-
 		attempt := 0
 		for {
 			// check the cache
@@ -169,6 +162,12 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 			server.Logger.Info("acquiring the lock", zap.String("key", key))
 			if err := server.LockMgr.Acquire(key, LockTtl); err == nil {
 				server.Logger.Info("lock acquired", zap.String("key", key))
+				defer func() {
+					// release the lock
+					if err := server.LockMgr.Release(key); err != nil {
+						server.Logger.Error("could not unlock the lock", zap.Error(err))
+					}
+				}()
 				serve(server, w, r)
 				return
 			} else {
