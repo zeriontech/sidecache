@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/zeriontech/sidecache/pkg/lock"
 	"io"
 	"io/ioutil"
 	"math"
@@ -17,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/amyangfei/redlock-go/v2/redlock"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zeriontech/sidecache/pkg/cache"
 	"go.uber.org/zap"
@@ -28,7 +28,7 @@ const applicationDefaultPort = ":9191"
 
 type CacheServer struct {
 	Repo           cache.Repository
-	LockMgr        *redlock.RedLock
+	LockMgr        lock.Lock
 	Proxy          *httputil.ReverseProxy
 	Prometheus     *Prometheus
 	Logger         *zap.Logger
@@ -41,7 +41,7 @@ type CacheData struct {
 	StatusCode int
 }
 
-func NewServer(repo cache.Repository, lockMgr *redlock.RedLock, proxy *httputil.ReverseProxy, prom *Prometheus, logger *zap.Logger) *CacheServer {
+func NewServer(repo cache.Repository, lockMgr lock.Lock, proxy *httputil.ReverseProxy, prom *Prometheus, logger *zap.Logger) *CacheServer {
 	return &CacheServer{
 		Repo:           repo,
 		LockMgr:        lockMgr,
@@ -124,7 +124,6 @@ func determinatePort() string {
 }
 
 func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := context.TODO()
 	server.Logger.Info("handling request", zap.String("url", r.URL.String()))
 	server.Prometheus.TotalRequestCounter.Inc()
 
@@ -151,8 +150,8 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 
 	if UseLock {
 		defer func() {
-			// unlock the lock
-			if err := server.LockMgr.UnLock(ctx, key); err != nil {
+			// release the lock
+			if err := server.LockMgr.Release(key); err != nil {
 				server.Logger.Error("could not unlock the lock", zap.Error(err))
 			}
 		}()
@@ -168,7 +167,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 
 			// try to acquire the lock
 			server.Logger.Info("acquiring the lock", zap.String("key", key))
-			if _, err := server.LockMgr.Lock(ctx, key, LockTtl); err == nil {
+			if err := server.LockMgr.Acquire(key, LockTtl); err == nil {
 				server.Logger.Info("lock acquired", zap.String("key", key))
 				serve(server, w, r)
 				return

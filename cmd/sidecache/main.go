@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/amyangfei/redlock-go/v2/redlock"
 	"github.com/zeriontech/sidecache/pkg/cache"
+	"github.com/zeriontech/sidecache/pkg/lock"
 	"github.com/zeriontech/sidecache/pkg/server"
 	"go.uber.org/zap"
 	"net/http/httputil"
@@ -17,28 +17,18 @@ func main() {
 	logger.Info("Side cache process started...", zap.String("version", version))
 
 	defer logger.Sync()
-	var cacheRepo cache.Repository
+	var redis *cache.RedisRepository
 	for {
 		logger.Info("Connecting to Redis...")
 		if repo, err := cache.NewRedisRepository(logger); err == nil {
-			cacheRepo = repo
+			redis = repo
 			break
 		}
 		time.Sleep(3 * time.Second)
 	}
 	logger.Info("Redis is connected.")
 
-	var lockMgr *redlock.RedLock
-	for {
-		logger.Info("Connecting to Redis LockManager...")
-		if mgr, err := redlock.NewRedLock([]string{os.Getenv("REDIS_ADDRESS")}); err == nil {
-			lockMgr = mgr
-			lockMgr.SetRetryCount(3) // we have our custom retries also
-			break
-		}
-		time.Sleep(3 * time.Second)
-	}
-	logger.Info("Redis LockManager is connected.")
+	lockMgr := lock.NewRedisLock(redis)
 
 	mainContainerPort := os.Getenv("MAIN_CONTAINER_PORT")
 	logger.Info("Main container port", zap.String("port", mainContainerPort))
@@ -53,7 +43,7 @@ func main() {
 
 	proxy := httputil.NewSingleHostReverseProxy(mainContainerURL)
 
-	cacheServer := server.NewServer(cacheRepo, lockMgr, proxy, prom, logger)
+	cacheServer := server.NewServer(redis, lockMgr, proxy, prom, logger)
 	logger.Info("Cache key prefix", zap.String("prefix", cacheServer.CacheKeyPrefix))
 
 	stopChan := make(chan int)

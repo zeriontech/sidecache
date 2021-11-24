@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"errors"
 	"go.uber.org/zap"
 	"os"
 	"time"
@@ -34,6 +35,17 @@ func (repository *RedisRepository) SetKey(key string, value []byte, ttl time.Dur
 	}
 }
 
+func (repository *RedisRepository) SetNX(key string, value string, ttl time.Duration) error {
+	result := repository.client.SetNX(key, value, ttl)
+	if result.Err() != nil {
+		return result.Err()
+	}
+	if !result.Val() {
+		return errors.New("value not set")
+	}
+	return nil
+}
+
 func (repository *RedisRepository) Get(key string) []byte {
 	status := repository.client.Get(key)
 	stringResult, err := status.Result()
@@ -46,4 +58,9 @@ func (repository *RedisRepository) Get(key string) []byte {
 	}
 
 	return []byte(stringResult)
+}
+
+func (repository *RedisRepository) Eval(script string, keys []string, args ...interface{}) error {
+	result := repository.client.Eval(script, keys, args...)
+	return result.Err()
 }
