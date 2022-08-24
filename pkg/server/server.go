@@ -10,7 +10,6 @@ import (
 	"github.com/zeriontech/sidecache/pkg/lock"
 	"io"
 	"io/ioutil"
-	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -252,9 +251,9 @@ func (server CacheServer) ReorderQueryString(url *url.URL) string {
 }
 
 func (server CacheServer) GetBackoff(attempt int) time.Duration {
-	multiplier := 1
-	if attempt%2 != 0 {
-		multiplier = 5
+	if attempt < 10 {
+		return 100 * time.Millisecond
+	} else {
+		return 500 * time.Millisecond
 	}
-	return time.Duration(multiplier*int(math.Pow(10, float64(attempt/2+1)))) * time.Millisecond
 }
