@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/zeriontech/sidecache/pkg/lock"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zeriontech/sidecache/pkg/cache"
+	"github.com/zeriontech/sidecache/pkg/lock"
 	"go.uber.org/zap"
 )
 
@@ -160,6 +160,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 			// try to acquire the lock
 			server.Logger.Info("acquiring the lock", zap.String("key", key))
 			if err := server.LockMgr.Acquire(key, LockTtl); err == nil {
+				server.Prometheus.LockAcquiringAttemptsHistogram.Observe(float64(attempt) + 1)
 				server.Logger.Info("lock acquired", zap.String("key", key))
 				defer func() {
 					// release the lock

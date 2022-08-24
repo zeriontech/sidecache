@@ -1,16 +1,31 @@
 package server
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
+	buildInfoGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "sidecache_admission_build_info",
+			Help: "Build info for sidecache admission webhook",
+		}, []string{"version"})
+
 	cacheHitCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "sidecache_" + ProjectName,
 			Name:      "cache_hit_counter",
 			Help:      "Cache hit count",
+		})
+
+	lockAcquiringAttemptsHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "sidecache_" + ProjectName,
+			Name:      "lock_acquiring_attempts_histogram",
+			Help:      "Lock acquiring attempts histogram",
+			Buckets:   []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 100},
 		})
 
 	totalRequestCounter = prometheus.NewCounter(
@@ -19,23 +34,22 @@ var (
 			Name:      "all_request_hit_counter",
 			Help:      "All request hit counter",
 		})
-
-	buildInfoGaugeVec = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "sidecache_admission_build_info",
-			Help: "Build info for sidecache admission webhook",
-		}, []string{"version"})
 )
 
 type Prometheus struct {
-	CacheHitCounter     prometheus.Counter
-	TotalRequestCounter prometheus.Counter
+	CacheHitCounter                prometheus.Counter
+	LockAcquiringAttemptsHistogram prometheus.Histogram
+	TotalRequestCounter            prometheus.Counter
 }
 
 func NewPrometheusClient() *Prometheus {
-	prometheus.MustRegister(cacheHitCounter, totalRequestCounter, buildInfoGaugeVec)
+	prometheus.MustRegister(buildInfoGaugeVec, cacheHitCounter, lockAcquiringAttemptsHistogram, totalRequestCounter)
 
-	return &Prometheus{TotalRequestCounter: totalRequestCounter, CacheHitCounter: cacheHitCounter}
+	return &Prometheus{
+		CacheHitCounter:                cacheHitCounter,
+		LockAcquiringAttemptsHistogram: lockAcquiringAttemptsHistogram,
+		TotalRequestCounter:            totalRequestCounter,
+	}
 }
 
 func BuildInfo(admission string) {
