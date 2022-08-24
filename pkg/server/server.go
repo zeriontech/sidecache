@@ -148,10 +148,10 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	resultKey := server.HashURL(server.ReorderQueryString(r.URL))
 
 	if UseLock {
-		attempt := 0
+		attempt := 1
 		for {
 			// check the cache
-			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt+1))
+			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt))
 			if cachedDataBytes := server.CheckCache(resultKey); cachedDataBytes != nil {
 				serveFromCache(cachedDataBytes, server, w, r)
 				return
@@ -160,8 +160,8 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 			// try to acquire the lock
 			server.Logger.Info("acquiring the lock", zap.String("key", key))
 			if err := server.LockMgr.Acquire(key, LockTtl); err == nil {
-				server.Prometheus.LockAcquiringAttemptsHistogram.Observe(float64(attempt) + 1)
-				server.Logger.Info("lock acquired", zap.String("key", key))
+				server.Prometheus.LockAcquiringAttemptsHistogram.Observe(float64(attempt))
+				server.Logger.Info("lock acquired", zap.String("key", key), zap.Int("attempt", attempt))
 				defer func() {
 					// release the lock
 					if err := server.LockMgr.Release(key); err != nil {
@@ -252,9 +252,8 @@ func (server CacheServer) ReorderQueryString(url *url.URL) string {
 }
 
 func (server CacheServer) GetBackoff(attempt int) time.Duration {
-	if attempt < 10 {
+	if attempt <= 10 {
 		return 100 * time.Millisecond
-	} else {
-		return 500 * time.Millisecond
 	}
+	return 500 * time.Millisecond
 }
