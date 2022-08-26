@@ -144,7 +144,7 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	path := strings.Split(r.URL.Path, "/")
-	key := "lock:" + path[1]
+	key := "lock:" + path[1] + "/" + path[2]
 	resultKey := server.HashURL(server.ReorderQueryString(r.URL))
 
 	if UseLock {

@@ -25,7 +25,7 @@ var (
 			Namespace: "sidecache_" + ProjectName,
 			Name:      "lock_acquiring_attempts_histogram",
 			Help:      "Lock acquiring attempts histogram",
-			Buckets:   []float64{0.999, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 100, 1000},
+			Buckets:   []float64{0.999, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 100, 200, 300, 500, 1000},
 		})
 
 	totalRequestCounter = prometheus.NewCounter(
