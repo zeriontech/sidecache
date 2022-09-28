@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/zeriontech/sidecache/pkg/lock"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/zeriontech/sidecache/pkg/lock"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zeriontech/sidecache/pkg/cache"
@@ -143,50 +144,50 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	path := strings.Split(r.URL.Path, "/")
-	key := "lock:" + path[1]
+	if !UseLock {
+		serve(server, w, r)
+		return
+	}
+
+	key := GetLockKey(server.Logger, r.URL)
 	resultKey := server.HashURL(server.ReorderQueryString(r.URL))
 
-	if UseLock {
-		attempt := 0
-		for {
-			// check the cache
-			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt+1))
-			if cachedDataBytes := server.CheckCache(resultKey); cachedDataBytes != nil {
-				serveFromCache(cachedDataBytes, server, w, r)
-				return
-			}
-
-			// try to acquire the lock
-			server.Logger.Info("acquiring the lock", zap.String("key", key))
-			if err := server.LockMgr.Acquire(key, LockTtl); err == nil {
-				server.Logger.Info("lock acquired", zap.String("key", key))
-				defer func() {
-					// release the lock
-					if err := server.LockMgr.Release(key); err != nil {
-						server.Logger.Error("could not unlock the lock", zap.Error(err))
-					}
-				}()
-				serve(server, w, r)
-				return
-			} else {
-				server.Logger.Error("lock is locked", zap.Error(err))
-			}
-
-			// wait a bit
-			backoff := server.GetBackoff(attempt)
-			if backoff >= LockTtl {
-				// failed to acquire the lock for too long
-				server.Logger.Error("failed to acquire the lock", zap.String("url", r.URL.String()))
-				w.WriteHeader(http.StatusGatewayTimeout)
-				return
-			}
-			server.Logger.Info("sleeping", zap.String("key", key), zap.Duration("backoff", backoff))
-			time.Sleep(backoff)
-			attempt++
+	attempt := 0
+	for {
+		// check the cache
+		server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt+1))
+		if cachedDataBytes := server.CheckCache(resultKey); cachedDataBytes != nil {
+			serveFromCache(cachedDataBytes, server, w, r)
+			return
 		}
-	} else {
-		serve(server, w, r)
+
+		// try to acquire the lock
+		server.Logger.Info("acquiring the lock", zap.String("key", key))
+		if err := server.LockMgr.Acquire(key, LockTtl); err == nil {
+			server.Logger.Info("lock acquired", zap.String("key", key))
+			defer func() {
+				// release the lock
+				if err := server.LockMgr.Release(key); err != nil {
+					server.Logger.Error("could not unlock the lock", zap.Error(err))
+				}
+			}()
+			serve(server, w, r)
+			return
+		} else {
+			server.Logger.Error("lock is locked", zap.Error(err))
+		}
+
+		// wait a bit
+		backoff := server.GetBackoff(attempt)
+		if backoff >= LockTtl {
+			// failed to acquire the lock for too long
+			server.Logger.Error("failed to acquire the lock", zap.String("url", r.URL.String()))
+			w.WriteHeader(http.StatusGatewayTimeout)
+			return
+		}
+		server.Logger.Info("sleeping", zap.String("key", key), zap.Duration("backoff", backoff))
+		time.Sleep(backoff)
+		attempt++
 	}
 }
 
@@ -256,4 +257,39 @@ func (server CacheServer) GetBackoff(attempt int) time.Duration {
 	} else {
 		return 500 * time.Millisecond
 	}
+}
+
+func GetLockKey(logger *zap.Logger, u *url.URL) string {
+	var key string
+	switch LockLocation {
+	case LocationPath:
+		path := strings.Split(u.Path, "/")
+		if LockIndex >= len(path) {
+			logger.Error(
+				"cannot parse lock key, index is out of bounds",
+				zap.String("url", u.String()),
+			)
+			return ""
+		}
+		key = path[LockIndex]
+	case LocationQuery:
+		values, ok := u.Query()[LockKey]
+		if !ok || len(values) == 0 {
+			logger.Error(
+				"cannot parse lock key, query param is missing",
+				zap.String("url", u.String()),
+			)
+			return ""
+		}
+		key = values[0]
+		for _, v := range values {
+			if v < key {
+				key = v
+			}
+		}
+	default:
+		logger.Error("lock is enabled but location is unspecified")
+		return ""
+	}
+	return "lock:" + key
 }
