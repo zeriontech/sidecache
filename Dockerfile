@@ -1,8 +1,10 @@
 FROM golang:1.17.3@sha256:b5bfe0255e6fac7cec1abd091b5cc3a5c40e2ae4d09bafbe5e94cb705647f0fc as builder
 
+ARG TARGETARCH
+
 ENV GO111MODULE=on \
     CGO_ENABLED=0  \
-    GOARCH="amd64" \
+    GOARCH=${TARGETARCH} \
     GOOS=linux
 
 WORKDIR /app

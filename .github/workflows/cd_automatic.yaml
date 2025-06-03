@@ -1,0 +1,25 @@
+name: Automatic CD, Release and Versioning
+
+on:
+  push:
+    branches:
+      - "**"
+
+jobs:
+  publish_and_increment:
+    name: Zerion Versioning And Deployment
+    # runs-on: ubuntu-latest
+    runs-on: zerion-arm-runners  # self-hosted arm64 runner
+    steps:
+      - name: Run Zerion Versioning
+        uses: zeriontech/zerion-github-actions/versioning@v4
+        with:
+          ECR_REPOSITORY: ${{ github.event.repository.name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
+          ZERION_PAT: ${{ secrets.ZERION_PAT }}
+          PLATFORM: linux/arm64
+          ARCH: "-arm64"
+          PRODUCTION_BRANCH: master
