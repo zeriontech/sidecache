@@ -7,10 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/zeriontech/sidecache/pkg/lock"
 	"io"
 	"io/ioutil"
-	"math"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -20,6 +18,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zeriontech/sidecache/pkg/cache"
+	"github.com/zeriontech/sidecache/pkg/lock"
 	"go.uber.org/zap"
 )
 
@@ -145,14 +144,14 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	path := strings.Split(r.URL.Path, "/")
-	key := "lock:" + path[1]
+	key := "lock:" + path[1] + "/" + path[2]
 	resultKey := server.HashURL(server.ReorderQueryString(r.URL))
 
 	if UseLock {
-		attempt := 0
+		attempt := 1
 		for {
 			// check the cache
-			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt+1))
+			server.Logger.Info("checking the cache", zap.String("resultKey", resultKey), zap.Int("attempt", attempt))
 			if cachedDataBytes := server.CheckCache(resultKey); cachedDataBytes != nil {
 				serveFromCache(cachedDataBytes, server, w, r)
 				return
@@ -161,7 +160,8 @@ func (server CacheServer) CacheHandler(w http.ResponseWriter, r *http.Request) {
 			// try to acquire the lock
 			server.Logger.Info("acquiring the lock", zap.String("key", key))
 			if err := server.LockMgr.Acquire(key, LockTtl); err == nil {
-				server.Logger.Info("lock acquired", zap.String("key", key))
+				server.Prometheus.LockAcquiringAttemptsHistogram.Observe(float64(attempt))
+				server.Logger.Info("lock acquired", zap.String("key", key), zap.Int("attempt", attempt))
 				defer func() {
 					// release the lock
 					if err := server.LockMgr.Release(key); err != nil {
@@ -252,9 +252,8 @@ func (server CacheServer) ReorderQueryString(url *url.URL) string {
 }
 
 func (server CacheServer) GetBackoff(attempt int) time.Duration {
-	multiplier := 1
-	if attempt%2 != 0 {
-		multiplier = 5
+	if attempt <= 10 {
+		return 100 * time.Millisecond
 	}
-	return time.Duration(multiplier*int(math.Pow(10, float64(attempt/2+1)))) * time.Millisecond
+	return 500 * time.Millisecond
 }
