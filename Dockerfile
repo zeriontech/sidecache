@@ -1,8 +1,9 @@
-FROM golang:1.17.3@sha256:b5bfe0255e6fac7cec1abd091b5cc3a5c40e2ae4d09bafbe5e94cb705647f0fc as builder
+FROM golang:1.17.3@sha256:b5bfe0255e6fac7cec1abd091b5cc3a5c40e2ae4d09bafbe5e94cb705647f0fc AS builder
 
+ARG TARGETARCH
 ENV GO111MODULE=on \
     CGO_ENABLED=0  \
-    GOARCH="amd64" \
+    GOARCH=${TARGETARCH} \
     GOOS=linux
 
 WORKDIR /app
@@ -22,15 +23,15 @@ RUN go build -v cmd/sidecache/main.go
 FROM gcr.io/distroless/base
 
 ARG release_version
-ENV RELEASE_VERSION=$release_version
-ENV LANG C.UTF-8
-ENV MAIN_CONTAINER_PORT "80"
-ENV REDIS_ADDRESS "127.0.0.1:6379"
-ENV REDIS_PASSWORD ""
-ENV CACHE_TTL "30s"
-ENV LOCK_TTL "15s"
-ENV USE_LOCK "false"
-ENV PROJECT_NAME ""
+ENV RELEASE_VERSION=$release_version \
+    LANG=C.UTF-8 \
+    MAIN_CONTAINER_PORT="80" \
+    REDIS_ADDRESS="127.0.0.1:6379" \
+    REDIS_PASSWORD="" \
+    CACHE_TTL="30s" \
+    LOCK_TTL="15s" \
+    USE_LOCK="false" \
+    PROJECT_NAME=""
 
 COPY --from=builder /app/main /app/main
 
